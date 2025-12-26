@@ -1,11 +1,18 @@
-numpy
-soundfile
-scipy
-torch<2.6
-tqdm
-librosa
-demucs
-onnxruntime-gpu
-PyQt5
-gradio==3.27.0
-matplotlib
+# Core ML/Audio
+torch==2.6.0
+numpy==2.3.5
+librosa==0.11.0
+soundfile==0.13.1
+onnxruntime==1.23.2
+
+# Demucs dependencies
+julius==0.2.7
+einops==0.8.1
+omegaconf==2.3.0
+diffq==0.2.4
+
+# GUI
+PyQt5==5.15.11
+
+# Note: For Python 3.13+, use 'diffq-fixed==0.2.4' instead of 'diffq==0.2.4'
+# For CUDA GPU support, use 'onnxruntime-gpu==1.23.2' instead of 'onnxruntime'
