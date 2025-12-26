@@ -14,12 +14,14 @@ QPushButton {
     background-color: #ffffff;
     border: 1px solid #e0e0e0;
     border-radius: 6px;
-    padding-top: 6px;
-    padding-bottom: 6px;
-    padding-left: 16px;
-    padding-right: 16px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    padding-left: 12px;
+    padding-right: 12px;
     color: #212121;
-    min-height: 24px;
+    min-height: 28px;
+    height: 28px;
+    line-height: 28px;
 }
 
 QPushButton::icon {
@@ -152,10 +154,13 @@ QComboBox {
     background-color: #ffffff;
     border: 1px solid #e0e0e0;
     border-radius: 6px;
-    padding: 8px;
-    min-height: 36px;
+    padding: 2px 8px;
+    min-height: 28px;
+    height: 28px;
     color: #212121;
     text-align: left;
+    font-size: 10pt;
+    line-height: 28px;
 }
 
 QComboBox:hover {
@@ -163,16 +168,20 @@ QComboBox:hover {
 }
 
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 24px; /* narrower drop area */
     border: none;
-    padding-right: 8px;
+    padding: 0 4px;
 }
 
 QComboBox::down-arrow {
     image: url(icons/layout.svg);
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     margin: 0px;
     padding: 0px;
+    /* center inside drop area */
 }
 
 QToolButton {
@@ -318,9 +327,9 @@ QTableWidget::item:selected:alternate {
     color: #ffffff;
 }
 
-/* Row hover uses a subtle light color in the light theme */
+/* Row hover uses a slightly stronger translucent overlay in the light theme */
 QTableWidget::item:hover {
-    background-color: #f0f0f0;
+    background-color: rgba(0,0,0,0.07);
 }
 
 QTableWidget::item:focus {

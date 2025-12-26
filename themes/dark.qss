@@ -14,12 +14,14 @@ QPushButton {
     background-color: #2d2d2d;
     border: 1px solid #3d3d3d;
     border-radius: 6px;
-    padding-top: 6px;
-    padding-bottom: 6px;
-    padding-left: 16px;
-    padding-right: 16px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    padding-left: 12px;
+    padding-right: 12px;
     color: #ffffff;
-    min-height: 24px;
+    min-height: 28px;
+    height: 28px;
+    line-height: 28px;
 }
 
 QPushButton::icon {
@@ -150,10 +152,13 @@ QComboBox {
     background-color: #2d2d2d;
     border: 1px solid #3d3d3d;
     border-radius: 6px;
-    padding: 8px;
-    min-height: 36px;
+    padding: 2px 8px;
+    min-height: 28px;
+    height: 28px;
     color: #ffffff;
     text-align: left;
+    font-size: 10pt;
+    line-height: 28px;
 }
 
 QComboBox:hover {
@@ -161,16 +166,20 @@ QComboBox:hover {
 }
 
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 24px; /* narrower drop area */
     border: none;
-    padding-right: 8px;
+    padding: 0 4px;
 }
 
 QComboBox::down-arrow {
     image: url(icons/layout.svg);
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     margin: 0px;
     padding: 0px;
+    /* center inside drop area */
 }
 
 QToolButton {
@@ -316,9 +325,9 @@ QTableWidget::item:selected:alternate {
     color: #ffffff;
 }
 
-/* Disable hover on table items entirely to avoid row color changes when hovering child widgets */
+/* Hover on table rows in dark theme: use a subtle dark overlay so it doesn't turn bright on darker rows */
 QTableWidget::item:hover {
-    background-color: transparent;
+    background-color: rgba(0,0,0,0.16);
 }
 
 /* Keep focus neutral */

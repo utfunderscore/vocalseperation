@@ -21,8 +21,39 @@ from demucs import pretrained
 from demucs.apply import apply_model
 import onnxruntime as ort
 from time import time
-import librosa
 import hashlib
+import threading
+
+# Global holder for the currently-running options dict so long-running
+# functions can check for a stop request set by the GUI worker.
+CURRENT_OPTIONS = None
+
+
+def stop_requested():
+    """Return True if the current options request a stop.
+
+    This helper supports two mechanisms:
+    - a thread-safe `stop_event` (preferred): options["stop_event"] should be a
+      `threading.Event` set by the GUI.
+    - the legacy `stop_requested` boolean flag in the options dict.
+    """
+    global CURRENT_OPTIONS
+    if not CURRENT_OPTIONS:
+        return False
+    ev = CURRENT_OPTIONS.get("stop_event")
+    if ev is not None:
+        try:
+            return ev.is_set()
+        except Exception:
+            pass
+    # fallback to legacy flag
+    return bool(CURRENT_OPTIONS.get("stop_requested"))
+
+
+class StopProcessing(Exception):
+    """Raised to request an early stop of processing."""
+
+    pass
 
 
 __VERSION__ = "1.0.1"
@@ -120,10 +151,20 @@ def get_models(name, device, load=True, vocals_model_type=0):
 
 
 def demix_base(mix, device, models, infer_session):
+    """Demix a short segment using given models and an ONNX session.
+
+    This function checks the global `CURRENT_OPTIONS` for a `stop_requested`
+    flag and raises `StopProcessing` if set so the GUI can gracefully cancel.
+    """
+    global CURRENT_OPTIONS
     start_time = time()
     sources = []
     n_sample = mix.shape[1]
     for model in models:
+        # Check for stop request between models
+        if stop_requested():
+            raise StopProcessing("Stop requested")
+
         trim = model.n_fft // 2
         gen_size = model.chunk_size - 2 * trim
         pad = gen_size - n_sample % gen_size
@@ -134,26 +175,34 @@ def demix_base(mix, device, models, infer_session):
         mix_waves = []
         i = 0
         while i < n_sample + pad:
+            # Check for stop request while building chunks
+            if stop_requested():
+                raise StopProcessing("Stop requested")
             waves = np.array(mix_p[:, i : i + model.chunk_size])
             mix_waves.append(waves)
             i += gen_size
         mix_waves = np.array(mix_waves)  # Convert the list to a single numpy.ndarray
         mix_waves = torch.tensor(mix_waves, dtype=torch.float32).to(device)
 
-    with torch.no_grad():
-        _ort = infer_session
-        stft_res = model.stft(mix_waves)
-        res = _ort.run(None, {"input": stft_res.cpu().numpy()})[0]
-        ten = torch.tensor(res).to(device)  # Move result tensor to device
-        tar_waves = model.istft(ten)  # This operation is performed on the GPU
-        tar_waves = (
-            tar_waves.cpu()
-        )  # Move the result back to CPU only after all computations
-        tar_signal = (
-            tar_waves[:, :, trim:-trim].transpose(0, 1).reshape(2, -1).numpy()[:, :-pad]
-        )
+        with torch.no_grad():
+            if stop_requested():
+                raise StopProcessing("Stop requested")
+            _ort = infer_session
+            stft_res = model.stft(mix_waves)
+            res = _ort.run(None, {"input": stft_res.cpu().numpy()})[0]
+            ten = torch.tensor(res).to(device)  # Move result tensor to device
+            tar_waves = model.istft(ten)  # This operation is performed on the GPU
+            tar_waves = (
+                tar_waves.cpu()
+            )  # Move the result back to CPU only after all computations
+            tar_signal = (
+                tar_waves[:, :, trim:-trim]
+                .transpose(0, 1)
+                .reshape(2, -1)
+                .numpy()[:, :-pad]
+            )
 
-        sources.append(tar_signal)
+            sources.append(tar_signal)
     # print('Time demix base: {:.2f} sec'.format(time() - start_time))
     return np.array(sources)
 
@@ -363,6 +412,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
         model = self.model_vocals_only
         shifts = 1
         overlap = overlap_large
+        if stop_requested():
+            raise StopProcessing("Stop requested")
         vocals_demucs = (
             0.5
             * apply_model(model, audio, shifts=shifts, overlap=overlap)[0][3]
@@ -374,6 +425,8 @@ class EnsembleDemucsMDXMusicSeparationModel:
             val = 100 * (current_file_number + 0.10) / total_files
             update_percent_func(int(val))
 
+        if stop_requested():
+            raise StopProcessing("Stop requested")
         vocals_demucs += (
             0.5
             * -apply_model(model, -audio, shifts=shifts, overlap=overlap)[0][3]
@@ -891,6 +944,14 @@ class EnsembleDemucsMDXMusicSeparationModelLowGPU:
 
 
 def predict_with_model(options):
+    """Top-level loop over input files with cooperative cancellation and callbacks.
+
+    The GUI Worker sets `options["stop_requested"] = True` to request a stop.
+    We expose `file_start_callback` and `file_done_callback` so the GUI can show
+    which file is being processed.
+    """
+    global CURRENT_OPTIONS
+
     for input_audio in options["input_audio"]:
         if not os.path.isfile(input_audio):
             print("Error. No such file: {}. Please check path!".format(input_audio))
@@ -914,67 +975,98 @@ def predict_with_model(options):
         print("Use low GPU memory version of code")
         model = EnsembleDemucsMDXMusicSeparationModelLowGPU(options)
 
-    update_percent_func = None
-    if "update_percent_func" in options:
-        update_percent_func = options["update_percent_func"]
+    update_percent_func = options.get("update_percent_func")
+    file_done_callback = options.get("file_done_callback")
+    file_start_callback = options.get("file_start_callback")
 
-    for i, input_audio in enumerate(options["input_audio"]):
-        print("Go for: {}".format(input_audio))
-        audio, sr = librosa.load(input_audio, mono=False, sr=44100)
-        if len(audio.shape) == 1:
-            audio = np.stack([audio, audio], axis=0)
-        print("Input audio: {} Sample rate: {}".format(audio.shape, sr))
-        result, sample_rates = model.separate_music_file(
-            audio.T,
-            sr,
-            update_percent_func,
-            i,
-            len(options["input_audio"]),
-            only_vocals,
-        )
-        all_instrum = model.instruments
-        if only_vocals:
-            all_instrum = ["vocals"]
-        stem = os.path.splitext(os.path.basename(input_audio))[0]
-        subfolder = os.path.join(output_folder, stem)
-        if not os.path.isdir(subfolder):
-            os.makedirs(subfolder, exist_ok=True)
-        for instrum in all_instrum:
-            output_name = "{}.wav".format(instrum)
-            out_path = os.path.join(subfolder, output_name)
-            sf.write(
-                out_path,
-                result[instrum],
-                sample_rates[instrum],
-                subtype="FLOAT",
-            )
-            print("File created: {}".format(out_path))
+    # make current options visible to demix helpers for stop checks
+    CURRENT_OPTIONS = options
 
-        # instrumental part 1
-        inst = audio.T - result["vocals"]
-        output_name = "instrum.wav"
-        out_path = os.path.join(subfolder, output_name)
-        sf.write(out_path, inst, sr, subtype="FLOAT")
-        print("File created: {}".format(out_path))
+    try:
+        for i, input_audio in enumerate(options["input_audio"]):
+            # cooperative stop check before each file
+            if stop_requested():
+                print("Stop requested, aborting before starting next file")
+                break
 
-        if not only_vocals:
-            # instrumental part 2
-            inst2 = result["bass"] + result["drums"] + result["other"]
-            output_name = "instrum2.wav"
-            out_path = os.path.join(subfolder, output_name)
-            sf.write(out_path, inst2, sr, subtype="FLOAT")
-            print("File created: {}".format(out_path))
+            print("Go for: {}".format(input_audio))
 
-        # notify caller (GUI worker) that this file is done
-        if "file_done_callback" in options and callable(options["file_done_callback"]):
+            # notify GUI that this file is starting
+            if callable(file_start_callback):
+                try:
+                    file_start_callback(input_audio)
+                except Exception:
+                    pass
+
             try:
-                options["file_done_callback"](input_audio)
-            except Exception:
-                pass
+                audio, sr = sf.read(input_audio, dtype="float32")
+                # soundfile returns shape (n_samples, channels) for multichannel audio
+                if audio.ndim == 1:
+                    audio = np.stack([audio, audio], axis=0)
+                elif audio.ndim == 2:
+                    # transpose to (channels, samples)
+                    audio = audio.T
+                print("Input audio: {} Sample rate: {}".format(audio.shape, sr))
 
-    if update_percent_func is not None:
-        val = 100
-        update_percent_func(int(val))
+                result, sample_rates = model.separate_music_file(
+                    audio.T,
+                    sr,
+                    update_percent_func,
+                    i,
+                    len(options["input_audio"]),
+                    only_vocals,
+                )
+            except StopProcessing:
+                print("Stop requested during file processing")
+                break
+
+            all_instrum = model.instruments
+            if only_vocals:
+                all_instrum = ["vocals"]
+            stem = os.path.splitext(os.path.basename(input_audio))[0]
+            subfolder = os.path.join(output_folder, stem)
+            if not os.path.isdir(subfolder):
+                os.makedirs(subfolder, exist_ok=True)
+            for instrum in all_instrum:
+                output_name = "{}.wav".format(instrum)
+                out_path = os.path.join(subfolder, output_name)
+                sf.write(
+                    out_path,
+                    result[instrum],
+                    sample_rates[instrum],
+                    subtype="FLOAT",
+                )
+                print("File created: {}".format(out_path))
+
+            # instrumental part 1
+            inst = audio.T - result["vocals"]
+            output_name = "instrum.wav"
+            out_path = os.path.join(subfolder, output_name)
+            sf.write(out_path, inst, sr, subtype="FLOAT")
+            print("File created: {}".format(out_path))
+
+            if not only_vocals:
+                # instrumental part 2
+                inst2 = result["bass"] + result["drums"] + result["other"]
+                output_name = "instrum2.wav"
+                out_path = os.path.join(subfolder, output_name)
+                sf.write(out_path, inst2, sr, subtype="FLOAT")
+                print("File created: {}".format(out_path))
+
+            # notify caller (GUI worker) that this file is done
+            if callable(file_done_callback):
+                try:
+                    file_done_callback(input_audio)
+                except Exception:
+                    pass
+
+        # ensure progress reaches 100 at end unless stopped early
+        if update_percent_func is not None:
+            update_percent_func(int(100))
+
+    finally:
+        # clear global pointer so future calls don't see stale stop flags
+        CURRENT_OPTIONS = None
 
 
 def md5(fname):
