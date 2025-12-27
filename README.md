@@ -5,8 +5,11 @@ Model based on [Demucs4](https://github.com/facebookresearch/demucs), [MDX](http
 ## Usage
 
 ```
-    python gui_modern.py
+python gui_modern.py
 ```
+
+## Screenshot
+![alt text](image.png)
 
 With this command audios with names "mixture1.wav" and "mixture2.wav" will be processed and results will be stored in `./results/` folder in WAV format.
 
