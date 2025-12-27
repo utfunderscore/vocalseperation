@@ -978,6 +978,9 @@ def predict_with_model(options):
     update_percent_func = options.get("update_percent_func")
     file_done_callback = options.get("file_done_callback")
     file_start_callback = options.get("file_start_callback")
+    file_write_func = options.get(
+        "file_write"
+    )  # optional: (path, data, sr, subtype) -> None
 
     # make current options visible to demix helpers for stop checks
     CURRENT_OPTIONS = options
@@ -1030,19 +1033,39 @@ def predict_with_model(options):
             for instrum in all_instrum:
                 output_name = "{}.wav".format(instrum)
                 out_path = os.path.join(subfolder, output_name)
-                sf.write(
-                    out_path,
-                    result[instrum],
-                    sample_rates[instrum],
-                    subtype="FLOAT",
-                )
+                if callable(file_write_func):
+                    try:
+                        file_write_func(
+                            out_path, result[instrum], sample_rates[instrum], "FLOAT"
+                        )
+                    except Exception:
+                        # fallback to direct write on error
+                        sf.write(
+                            out_path,
+                            result[instrum],
+                            sample_rates[instrum],
+                            subtype="FLOAT",
+                        )
+                else:
+                    sf.write(
+                        out_path,
+                        result[instrum],
+                        sample_rates[instrum],
+                        subtype="FLOAT",
+                    )
                 print("File created: {}".format(out_path))
 
             # instrumental part 1
             inst = audio.T - result["vocals"]
             output_name = "instrum.wav"
             out_path = os.path.join(subfolder, output_name)
-            sf.write(out_path, inst, sr, subtype="FLOAT")
+            if callable(file_write_func):
+                try:
+                    file_write_func(out_path, inst, sr, "FLOAT")
+                except Exception:
+                    sf.write(out_path, inst, sr, subtype="FLOAT")
+            else:
+                sf.write(out_path, inst, sr, subtype="FLOAT")
             print("File created: {}".format(out_path))
 
             if not only_vocals:
@@ -1050,7 +1073,13 @@ def predict_with_model(options):
                 inst2 = result["bass"] + result["drums"] + result["other"]
                 output_name = "instrum2.wav"
                 out_path = os.path.join(subfolder, output_name)
-                sf.write(out_path, inst2, sr, subtype="FLOAT")
+                if callable(file_write_func):
+                    try:
+                        file_write_func(out_path, inst2, sr, "FLOAT")
+                    except Exception:
+                        sf.write(out_path, inst2, sr, subtype="FLOAT")
+                else:
+                    sf.write(out_path, inst2, sr, subtype="FLOAT")
                 print("File created: {}".format(out_path))
 
             # notify caller (GUI worker) that this file is done
